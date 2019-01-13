@@ -6,9 +6,12 @@ import numpy as np
 import io
 
 
-def placeBoxes(res, labels_map, prob_threshold, frame, initial_w, initial_h, is_async_mode, cur_request_id, det_time):
+def placeBoxes(res, labels_map, prob_threshold, frame, initial_w, initial_h, is_async_mode, cur_request_id, det_time, batch_id = 0):
     for obj in res[0][0]:
         # Draw only objects when probability more than specified threshold
+        if int(obj[0]) != batch_id:
+            continue
+            
         if obj[2] > prob_threshold:
             xmin = int(obj[3] * initial_w)
             ymin = int(obj[4] * initial_h)
