@@ -212,7 +212,7 @@ def parse_model_labels_from_file(label_file_name=str()):
         sys.exit(2)
 
     label_list = list()
-    print('Labels: ')
+    print('Labels:                      ')
     with open(label_file_name) as f:
         lines = f.readlines()
         for line in lines:
@@ -319,7 +319,7 @@ def load_video(source, path):
     if source == 'live':
         print('Loading {} Video '.format(source))
         cap = cv.VideoCapture(0)
-        print('Video FPS: {}'.format(cap.get(cv.CAP_PROP_FPS)))
+        print('Video FPS:                {}'.format(cap.get(cv.CAP_PROP_FPS)))
         if cap.get(cv.CAP_PROP_FPS) > 0.0:
             Config.FPS_DELAY = int(1000 / cap.get(cv.CAP_PROP_FPS))
         else:
@@ -332,7 +332,7 @@ def load_video(source, path):
             sys.exit(2)
 
         cap = cv.VideoCapture(path)
-        print('Video FPS: {}'.format(cap.get(cv.CAP_PROP_FPS)))
+        print('Video FPS:                 {}'.format(cap.get(cv.CAP_PROP_FPS)))
         Config.FPS_DELAY = int(1000 / cap.get(cv.CAP_PROP_FPS))
         return cap
     else:
@@ -471,7 +471,7 @@ def main(argv):
     Config.IMAGE_WIDTH = cap.get(cv.CAP_PROP_FRAME_WIDTH)
     Config.IMAGE_HEIGHT = cap.get(cv.CAP_PROP_FRAME_HEIGHT)
 
-    print("Video Resolution {} x {}".format(Config.IMAGE_WIDTH, Config.IMAGE_HEIGHT))
+    print("Video Resolution       : {} x {}".format(Config.IMAGE_WIDTH, Config.IMAGE_HEIGHT))
 
     # Deep Learning Network Object
     openvino_net = None
@@ -496,7 +496,7 @@ def main(argv):
         print('OpenVINO Framework Selected ...')
 
         # Read Inference Engine Network with given .bin/.xml files
-        print('Loading DL Model Files: {} - {}'.format(Config.MODEL_FILE, Config.MODEL_WEIGHT_FILE))
+        print('Loading DL Model Files:       {} - {}'.format(Config.MODEL_FILE, Config.MODEL_WEIGHT_FILE))
         network = IENetwork(model=Config.MODEL_FILE, weights=Config.MODEL_WEIGHT_FILE)
 
         # If OpenVINO Selected, Check for Hardware (GPU, MYRIAD or CPU) is supported for this example
@@ -643,6 +643,8 @@ def main(argv):
     frame_count = 0
     start_time = time.time()
 
+    cpu_count = psutil.cpu_count()
+    
     # Start Reading Frames
     while True:
         # read frame from capture
@@ -727,10 +729,21 @@ def main(argv):
                    0.4,
                    (255, 255, 255),
                    1)
-
+        # CPU Load
+        current_cpu_load = process.cpu_percent()        
+        cpu_load = current_cpu_load / cpu_count
         cv.putText(frame,
-                   'CPU Count: {} - CPU% : {} '.format(psutil.cpu_count(), process.cpu_percent()),
-                   (10, 35),
+                   'CPU Load %: {} '.format((cpu_load)),
+                   (10, 25),
+                   cv.FONT_HERSHEY_SIMPLEX,
+                   0.4,
+                   (255, 255, 255),
+                   1)
+        current_end = time.time()
+        current_fps = frame_count / (current_end - start_time)
+        cv.putText(frame,
+                   'FPS : {} '.format((round(current_fps, 3))),
+                   (10, 38),
                    cv.FONT_HERSHEY_SIMPLEX,
                    0.4,
                    (255, 255, 255),
@@ -740,8 +753,8 @@ def main(argv):
 
         if Config.ASYNC:
             request_ids.append(cur_request_id)
-            next_request_id = request_ids.pop(0)
             cur_request_id = next_request_id
+            next_request_id = request_ids.pop(0)
             frame = next_frame
 
         if cv.waitKey(Config.FPS_DELAY) & 0xFF == ord('q'):
@@ -770,10 +783,16 @@ def main(argv):
     print('Pre-process for 1 Frame: ' +
           str(round((resize_time_duration / inferred_frame_count) * 1000, 3)),
           ' milliseconds')
-    print('Inference for 1 Frame: ' +
-          str(round((inference_time_duration / inferred_frame_count) * 1000, 3)),
-          ' milliseconds')
+    
     global post_process_durations
+    if not Config.ASYNC:
+        print('Inference for 1 Frame: ' +
+              str(round((inference_time_duration / inferred_frame_count) * 1000, 3)),
+              ' milliseconds')
+    else:
+        print('Inference for 1 Frame: ', str(round(((elapsed_time - frame_read_times - resize_time_duration - post_process_durations)                          / frame_count) * 1000, 3)), ' milliseconds')
+        
+    
     print('Post-process for 1 Frame: ' +
           str(round((post_process_durations / inferred_frame_count) * 1000, 3)),
           ' milliseconds (including display, key wait time ...)')
