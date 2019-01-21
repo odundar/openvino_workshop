@@ -35,7 +35,6 @@ from openvino.inference_engine import IENetwork, IEPlugin
 # opencv_backends = (cv.dnn.DNN_BACKEND_DEFAULT, cv.dnn.DNN_BACKEND_HALIDE, cv.dnn.DNN_BACKEND_INFERENCE_ENGINE, cv.dnn.DNN_BACKEND_OPENCV)
 # opencv_targets = (cv.dnn.DNN_TARGET_CPU, cv.dnn.DNN_TARGET_OPENCL, cv.dnn.DNN_TARGET_OPENCL_FP16, cv.dnn.DNN_TARGET_MYRIAD)
 
-
 # Performance Counters
 global inference_time_duration
 global resize_time_durations
@@ -44,6 +43,7 @@ global post_process_durations
 post_process_durations = 0.
 global inferred_frame_count
 global frame_read_times
+
 
 class Config:
     """
@@ -319,7 +319,7 @@ def load_video(source, path):
     if source == 'live':
         print('Loading {} Video '.format(source))
         cap = cv.VideoCapture(0)
-        print('Video FPS:                {}'.format(cap.get(cv.CAP_PROP_FPS)))
+        print('Video FPS                       :{}'.format(cap.get(cv.CAP_PROP_FPS)))
         if cap.get(cv.CAP_PROP_FPS) > 0.0:
             Config.FPS_DELAY = int(1000 / cap.get(cv.CAP_PROP_FPS))
         else:
@@ -332,11 +332,11 @@ def load_video(source, path):
             sys.exit(2)
 
         cap = cv.VideoCapture(path)
-        print('Video FPS:                 {}'.format(cap.get(cv.CAP_PROP_FPS)))
+        print('Video FPS                       :{}'.format(cap.get(cv.CAP_PROP_FPS)))
         Config.FPS_DELAY = int(1000 / cap.get(cv.CAP_PROP_FPS))
         return cap
     else:
-        print("Unidentified Source Input: {}".format(source))
+        print("Unidentified Source Input       :{}".format(source))
         print('-i, --input live|offline : source of video, either webcam or video on disk, Exiting ...')
         sys.exit(2)
 
@@ -345,7 +345,7 @@ def opencv_inference(blob, network):
     """Method used to run inference on given frame with given network
 
         Args:
-            frame: Resized frame to run forward propogation on the given DNN object
+            blob: Resized and objectified frame to run forward propagation on the given DNN object
             network: DNN Network loaded
 
         Returns:
@@ -371,7 +371,6 @@ def post_process(frame, detections):
         Returns:
             Processed frame
     """
-
 
     for detection in detections:
         # confidence score
@@ -423,6 +422,78 @@ def post_process(frame, detections):
     return frame
 
 
+def get_openvino_plugin(openvino_network, inference_platform, library_path, cpu_libpath):
+    """
+    Method used to load IEPlugin according to given target platform
+    :param openvino_network: IENetwork object
+    :param inference_platform: Target Device Plugin name (CPU, GPU, HETERO:MYRIAD,GPU,CPU etc.
+    :param library_path: Lib path to Shared Libraries /opt/intel/computer_vision_sdk/deployment_tools/inference_engine/lib/ubuntu..
+    :return: IEPlugin object
+    """
+    openvino_plugin = None
+
+    # If OpenVINO Selected, Check for Hardware (GPU, MYRIAD or CPU) is supported for this example
+    # Load corresponding device library from the indicated paths, this application requires the environment
+    # variables are already set correctly
+    # source /opt/intel/computer_vision_sdk/bin/setupvars.sh
+    if inference_platform == 'GPU':
+        print('Trying to Load OpenVINO GPU Plugin')
+        openvino_plugin = IEPlugin(device=inference_platform, plugin_dirs=library_path)
+    elif inference_platform == 'MYRIAD':
+        print('Trying to Load OpenVINO Myriad Plugin')
+        openvino_plugin = IEPlugin(device=inference_platform, plugin_dirs=library_path)
+        openvino_plugin.set_config({"VPU_FORCE_RESET": "NO"})
+    elif inference_platform == 'HETERO:CPU,GPU' or inference_platform == 'HETERO:GPU,CPU':
+        openvino_plugin = IEPlugin(device=inference_platform, plugin_dirs=library_path)
+        openvino_plugin.add_cpu_extension(cpu_libpath)
+        openvino_plugin.set_config({"TARGET_FALLBACK": inference_platform.split(':')[1]})
+        # Enable graph visualization
+        # openvino_plugin.set_config({"HETERO_DUMP_GRAPH_DOT": "YES"})
+        openvino_plugin.set_initial_affinity(openvino_network)
+        supported_layers = openvino_plugin.get_supported_layers(openvino_network)
+        print('Supported Layers')
+        # [print(layer) for layer in supported_layers]
+        not_supported_layers = [l for l in openvino_network.layers.keys() if l not in supported_layers]
+        print('UnSupported Layers')
+        # [print(layer) for layer in not_supported_layers]
+    elif inference_platform == 'HETERO:MYRIAD,GPU' or inference_platform == 'HETERO:GPU,MYRIAD':
+        openvino_plugin = IEPlugin(device=inference_platform, plugin_dirs=library_path)
+        openvino_plugin.set_config({"TARGET_FALLBACK": inference_platform.split(':')[1]})
+        # Enable graph visualization
+        # openvino_plugin.set_config({"HETERO_DUMP_GRAPH_DOT": "YES"})
+        openvino_plugin.set_initial_affinity(openvino_network)
+        supported_layers = openvino_plugin.get_supported_layers(openvino_network)
+        print('Supported Layers')
+        # [print(layer) for layer in supported_layers]
+        not_supported_layers = [l for l in openvino_network.layers.keys() if l not in supported_layers]
+        print('UnSupported Layers')
+        # [print(layer) for layer in not_supported_layers]
+    elif inference_platform == 'HETERO:MYRIAD,CPU' or inference_platform == 'HETERO:CPU,MYRIAD':
+        openvino_plugin = IEPlugin(device=inference_platform, plugin_dirs=library_path)
+        openvino_plugin.add_cpu_extension(cpu_libpath)
+        openvino_plugin.set_config({"TARGET_FALLBACK": inference_platform.split(':')[1]})
+        # Enable graph visualization
+        # openvino_plugin.set_config({"HETERO_DUMP_GRAPH_DOT": "YES"})
+        openvino_plugin.set_initial_affinity(openvino_network)
+        supported_layers = openvino_plugin.get_supported_layers(openvino_network)
+        print('Supported Layers')
+        # [print(layer) for layer in supported_layers]
+        not_supported_layers = [l for l in openvino_network.layers.keys() if l not in supported_layers]
+        print('UnSupported Layers')
+        # [print(layer) for layer in not_supported_layers]
+    elif inference_platform == "CPU":
+        # By default try to load CPU library
+        print('Trying to Load OpenVINO CPU Plugin')
+        openvino_plugin = IEPlugin(device=inference_platform, plugin_dirs=library_path)
+        openvino_plugin.add_cpu_extension(cpu_libpath)
+    else:
+        print('Undefined Target Platform for OpenVINO: {}'.format(inference_platform))
+        help_menu()
+        exit(-2)
+
+    return openvino_plugin
+
+
 def main(argv):
     """Main method runs the application logic
 
@@ -449,7 +520,6 @@ def main(argv):
     frame_display_times = 0.
     global post_process_durations
 
-
     # Parse cli arguments
     parse_cli_arguments(argv)
 
@@ -464,14 +534,14 @@ def main(argv):
     # Open Video with OpenCV
     cap = load_video(Config.VIDEOSOURCE, Config.VIDEOPATH)
 
-    print("Video Properties:")
-    print("Loaded {} Video {}".format(Config.VIDEOSOURCE, Config.VIDEOPATH))
+    print("Loaded Video                    :{}".format(Config.VIDEOSOURCE))
+    print("Video Path                      :{}".format(Config.VIDEOPATH))
 
     # Actual Frame Width/Height
     Config.IMAGE_WIDTH = cap.get(cv.CAP_PROP_FRAME_WIDTH)
     Config.IMAGE_HEIGHT = cap.get(cv.CAP_PROP_FRAME_HEIGHT)
 
-    print("Video Resolution       : {} x {}".format(Config.IMAGE_WIDTH, Config.IMAGE_HEIGHT))
+    print("Video Resolution                :{} x {}".format(Config.IMAGE_WIDTH, Config.IMAGE_HEIGHT))
 
     # Deep Learning Network Object
     openvino_net = None
@@ -496,88 +566,38 @@ def main(argv):
         print('OpenVINO Framework Selected ...')
 
         # Read Inference Engine Network with given .bin/.xml files
-        print('Loading DL Model Files:       {} - {}'.format(Config.MODEL_FILE, Config.MODEL_WEIGHT_FILE))
+        print('Loading DL Model Files          : {} - {}'.format(Config.MODEL_FILE, Config.MODEL_WEIGHT_FILE))
         network = IENetwork(model=Config.MODEL_FILE, weights=Config.MODEL_WEIGHT_FILE)
 
-        # If OpenVINO Selected, Check for Hardware (GPU, MYRIAD or CPU) is supported for this example
-        # Load corresponding device library from the indicated paths, this application requires the environment
-        # variables are already set correctly
-        # source /opt/intel/computer_vision_sdk/bin/setupvars.sh
-        if Config.INFERENCE_PLATFORM == 'GPU':
-            print('Trying to Load OpenVINO GPU Plugin')
-            openvino_plugin = IEPlugin(device=Config.INFERENCE_PLATFORM, plugin_dirs=Config.OPENVINO_LIBPATH)
-        elif Config.INFERENCE_PLATFORM == 'MYRIAD':
-            print('Trying to Load OpenVINO Myriad Plugin')
-            openvino_plugin = IEPlugin(device=Config.INFERENCE_PLATFORM, plugin_dirs=Config.OPENVINO_LIBPATH)
-            openvino_plugin.set_config({"VPU_FORCE_RESET": "NO"})
-        elif Config.INFERENCE_PLATFORM == 'HETERO:CPU,GPU' or Config.INFERENCE_PLATFORM == 'HETERO:GPU,CPU':
-            openvino_plugin = IEPlugin(device=Config.INFERENCE_PLATFORM, plugin_dirs=Config.OPENVINO_LIBPATH)
-            openvino_plugin.add_cpu_extension(Config.OPENVINO_CPU_LIBPATH)
-            openvino_plugin.set_config({"TARGET_FALLBACK": Config.INFERENCE_PLATFORM.split(':')[1]})
-            # Enable graph visualization
-            # openvino_plugin.set_config({"HETERO_DUMP_GRAPH_DOT": "YES"})
-            openvino_plugin.set_initial_affinity(network)
-            supported_layers = openvino_plugin.get_supported_layers(network)
-            print('Supported Layers')
-            # [print(layer) for layer in supported_layers]
-            not_supported_layers = [l for l in network.layers.keys() if l not in supported_layers]
-            print('UnSupported Layers')
-            # [print(layer) for layer in not_supported_layers]
-        elif Config.INFERENCE_PLATFORM == 'HETERO:MYRIAD,GPU' or Config.INFERENCE_PLATFORM == 'HETERO:GPU,MYRIAD':
-            openvino_plugin = IEPlugin(device=Config.INFERENCE_PLATFORM, plugin_dirs=Config.OPENVINO_LIBPATH)
-            openvino_plugin.set_config({"TARGET_FALLBACK": Config.INFERENCE_PLATFORM.split(':')[1]})
-            # Enable graph visualization
-            # openvino_plugin.set_config({"HETERO_DUMP_GRAPH_DOT": "YES"})
-            openvino_plugin.set_initial_affinity(network)
-            supported_layers = openvino_plugin.get_supported_layers(network)
-            print('Supported Layers')
-            # [print(layer) for layer in supported_layers]
-            not_supported_layers = [l for l in network.layers.keys() if l not in supported_layers]
-            print('UnSupported Layers')
-            # [print(layer) for layer in not_supported_layers]
-        elif Config.INFERENCE_PLATFORM == 'HETERO:MYRIAD,CPU' or Config.INFERENCE_PLATFORM == 'HETERO:CPU,MYRIAD':
-            openvino_plugin = IEPlugin(device=Config.INFERENCE_PLATFORM, plugin_dirs=Config.OPENVINO_LIBPATH)
-            openvino_plugin.add_cpu_extension(Config.OPENVINO_CPU_LIBPATH)
-            openvino_plugin.set_config({"TARGET_FALLBACK": Config.INFERENCE_PLATFORM.split(':')[1]})
-            # Enable graph visualization
-            # openvino_plugin.set_config({"HETERO_DUMP_GRAPH_DOT": "YES"})
-            openvino_plugin.set_initial_affinity(network)
-            supported_layers = openvino_plugin.get_supported_layers(network)
-            print('Supported Layers')
-            # [print(layer) for layer in supported_layers]
-            not_supported_layers = [l for l in network.layers.keys() if l not in supported_layers]
-            print('UnSupported Layers')
-            # [print(layer) for layer in not_supported_layers]
-        elif Config.INFERENCE_PLATFORM == "CPU":
-            # By default try to load CPU library
-            print('Trying to Load OpenVINO CPU Plugin')
-            openvino_plugin = IEPlugin(device=Config.INFERENCE_PLATFORM, plugin_dirs=Config.OPENVINO_LIBPATH)
-            openvino_plugin.add_cpu_extension(Config.OPENVINO_CPU_LIBPATH)
-        else:
-            print('Undefined Target Platform for OpenVINO: {}'.format(Config.INFERENCE_PLATFORM))
-            help_menu()
-            exit(-2)
+        openvino_plugin = get_openvino_plugin(network,
+                                              Config.INFERENCE_PLATFORM,
+                                              Config.OPENVINO_LIBPATH,
+                                              Config.OPENVINO_CPU_LIBPATH)
 
         input_blob = next(iter(network.inputs))
-        print('OpenVINO Model Input Blob: ', type(input_blob))
+        print('OpenVINO Model Input Blob       :', type(input_blob))
 
         n, c, h, w = network.inputs[input_blob].shape
         Config.MODEL_IMAGE_HEIGHT = h
         Config.MODEL_IMAGE_WIDTH = w
-        print('Input Properties: batch: {} channels: {} height: {} width: {}'.format(n, c, h, w))
+        print('Input Properties')
+        print('Batch                           :{}'.format(n))
+        print('Channels                        :{}'.format(c))
+        print('Height                          :{}'.format(h))
+        print('Width                           :{}'.format(w))
 
         out_blob = next(iter(network.outputs))
-        print('OpenVINO Model Output Blob: ', type(out_blob))
+        print('OpenVINO Model Output Blob      :', type(out_blob))
 
         network.batch_size = Config.BATCH_SIZE
-        print('Batch Size: ', network.batch_size)
+        print('Batch Size                      :', network.batch_size)
 
         print("Loading Given Model with IEPlugin ...")
         openvino_net = openvino_plugin.load(network=network, num_requests=Config.OPENVINO_NUM_REQUESTS)
 
         if Config.ASYNC:
             request_ids = list(np.arange(0, Config.OPENVINO_NUM_REQUESTS))
-            print("Number of Requests to Handle ", Config.OPENVINO_NUM_REQUESTS)
+            print("Number of Requests to Handle    :", Config.OPENVINO_NUM_REQUESTS)
         else:
             request_ids.append(0)
 
@@ -624,7 +644,6 @@ def main(argv):
 
     network_load_time_end = time.time()
     # Start Counting frames to Calculate FPS
-
 
     detections = None
 
@@ -733,7 +752,7 @@ def main(argv):
         current_cpu_load = process.cpu_percent()        
         cpu_load = current_cpu_load / cpu_count
         cv.putText(frame,
-                   'CPU Load %: {} '.format((cpu_load)),
+                   'CPU Load %: {} '.format(cpu_load),
                    (10, 25),
                    cv.FONT_HERSHEY_SIMPLEX,
                    0.4,
@@ -770,30 +789,33 @@ def main(argv):
     elapsed_time = end_time - start_time
     network_load_time = network_load_time_end - network_load_time_start
 
-    print('Total Execution Time: ',
+    print('Total Execution Time             :',
           elapsed_time, ' Seconds')
-    print('Processed Frame Count: ',
+    print('Processed Frame Count            :',
           inferred_frame_count, ' Frames')
     print('Network Load Time: ' +
           str(network_load_time) + ' Seconds')
-    print('Reading 1 Frame in: ' +
+    print('Reading 1 Frame in               :' +
           str(round((frame_read_times / frame_count) * 1000, 3)) + ' Milliseconds')
-    print('Frames Per Second: ' +
+    print('Frames Per Second                :' +
           str(round(frame_count / elapsed_time, 3)))
-    print('Pre-process for 1 Frame: ' +
+    print('Pre-process for 1 Frame          :' +
           str(round((resize_time_duration / inferred_frame_count) * 1000, 3)),
           ' milliseconds')
     
     global post_process_durations
     if not Config.ASYNC:
-        print('Inference for 1 Frame: ' +
+        print('Inference for 1 Frame        :' +
               str(round((inference_time_duration / inferred_frame_count) * 1000, 3)),
               ' milliseconds')
     else:
-        print('Inference for 1 Frame: ', str(round(((elapsed_time - frame_read_times - resize_time_duration - post_process_durations)                          / frame_count) * 1000, 3)), ' milliseconds')
-        
-    
-    print('Post-process for 1 Frame: ' +
+        print('Inference for 1 Frame        :',
+              str(round(((elapsed_time - frame_read_times -
+                          resize_time_duration - post_process_durations)
+                         / frame_count) * 1000, 3)),
+              ' milliseconds')
+
+    print('Post-process for 1 Frame         :' +
           str(round((post_process_durations / inferred_frame_count) * 1000, 3)),
           ' milliseconds (including display, key wait time ...)')
 
@@ -803,10 +825,10 @@ def main(argv):
           'Infer Time - Post Process Time')
 
     print('{} - {} - {} - {} - {} \n'.format(elapsed_time * 1000.,
-                                                 frame_read_times * 1000,
-                                                 resize_time_duration * 1000,
-                                                 inference_time_duration * 1000,
-                                                 post_process_durations * 1000))
+                                             frame_read_times * 1000,
+                                             resize_time_duration * 1000,
+                                             inference_time_duration * 1000,
+                                             post_process_durations * 1000))
 
     # print('Total Elapsed Time: {} Milliseconds'.format(elapsed_time * 1000))
 
