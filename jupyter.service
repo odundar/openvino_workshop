@@ -1,0 +1,21 @@
+[Unit]
+Description=Jupyter Notebook
+
+[Service]
+Type=simple
+PIDFile=/run/jupyter.pid
+Environment="PATH=/opt/intel/openvino/deployment_tools/model_optimizer:/home/intel/bin:/home/intel/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+Environment="PYTHONPATH=/opt/intel/openvino/python/python3.5:/opt/intel/openvino/deployment_tools/model_optimizer:/opt/intel/openvino/python/python3.5:/opt/intel/openvino/deployment_tools/model_optimizer"
+Environment="LD_LIBRARY_PATH=/opt/intel/openvino/opencv/lib:/opt/intel/opencl:/opt/intel/openvino/deployment_tools/inference_engine/external/hddl/lib:/opt/intel/openvino/deployment_tools/inference_engine/external/gna/lib:/opt/intel/openvino/deployment_tools/inference_engine/external/mkltiny_lnx/lib:/opt/intel/openvino/deployment_tools/inference_engine/external/tbb/lib:/opt/intel/openvino/deployment_tools/inference_engine/lib/intel64:/opt/intel/openvino/openvx/lib:/opt/intel/openvino/opencv/lib:/opt/intel/opencl:/opt/intel/openvino/deployment_tools/inference_engine/external/hddl/lib:/opt/intel/openvino/deployment_tools/inference_engine/external/gna/lib:/opt/intel/openvino/deployment_tools/inference_engine/external/mkltiny_lnx/lib:/opt/intel/openvino/deployment_tools/inference_engine/external/tbb/lib:/opt/intel/openvino/deployment_tools/inference_engine/lib/intel64:/opt/intel/openvino/openvx/lib"
+Environment="OpenCV_DIR=/opt/intel/openvino/opencv/cmake"
+Environment="InferenceEngine_DIR=/opt/intel/openvino/deployment_tools/inference_engine/share"
+Environment="IE_PLUGINS_PATH=/opt/intel/openvino/deployment_tools/inference_engine/lib/intel64"
+ExecStart=/home/intel/.local/bin/jupyter-notebook --config=/home/intel/.jupyter/jupyter_notebook_config.py
+User=intel
+Group=intel
+WorkingDirectory=/home/intel
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
