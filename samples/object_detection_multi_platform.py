@@ -114,8 +114,8 @@ class Config:
     OPENVINO_PERFORMANCE_COUNTER = False
 
     # Libray Paths
-    OPENVINO_CPU_LIBPATH = '/home/intel/inference_engine_samples/intel64/Release/lib/libcpu_extension.so'
-    OPENVINO_LIBPATH = '/opt/intel/computer_vision_sdk/deployment_tools/inference_engine/lib/ubuntu_16.04/intel64/'
+    OPENVINO_CPU_LIBPATH = '/home/intel/inference_engine_samples_build/intel64/Release/lib/libcpu_extension.so'
+    OPENVINO_LIBPATH = '/opt/intel/openvino/deployment_tools/inference_engine/lib/intel64'
 
     @staticmethod
     def print_summary():
@@ -427,7 +427,7 @@ def get_openvino_plugin(openvino_network, inference_platform, library_path, cpu_
     Method used to load IEPlugin according to given target platform
     :param openvino_network: IENetwork object
     :param inference_platform: Target Device Plugin name (CPU, GPU, HETERO:MYRIAD,GPU,CPU etc.
-    :param library_path: Lib path to Shared Libraries /opt/intel/computer_vision_sdk/deployment_tools/inference_engine/lib/ubuntu..
+    :param library_path: Lib path to Shared Libraries /opt/intel/openvino/deployment_tools/inference_engine/lib/ubuntu..
     :return: IEPlugin object
     """
     openvino_plugin = None
@@ -435,7 +435,7 @@ def get_openvino_plugin(openvino_network, inference_platform, library_path, cpu_
     # If OpenVINO Selected, Check for Hardware (GPU, MYRIAD or CPU) is supported for this example
     # Load corresponding device library from the indicated paths, this application requires the environment
     # variables are already set correctly
-    # source /opt/intel/computer_vision_sdk/bin/setupvars.sh
+    # source /opt/intel/openvino/bin/setupvars.sh
     if inference_platform == 'GPU':
         print('Trying to Load OpenVINO GPU Plugin')
         openvino_plugin = IEPlugin(device=inference_platform, plugin_dirs=library_path)
