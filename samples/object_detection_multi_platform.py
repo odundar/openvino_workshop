@@ -27,6 +27,7 @@ import time
 import cv2 as cv
 import numpy as np
 import psutil
+from math import exp as exp
 
 # Import OpenVINO
 from openvino.inference_engine import IENetwork, IEPlugin
@@ -50,7 +51,7 @@ class Config:
     Config Model to Store Arguments
     """
     # Detection Threshold
-    CONFIDENCE = 0.6
+    CONFIDENCE_THRESHOLD = 0.6
 
     # Source Type of Video
     VIDEOSOURCE = str()
@@ -113,6 +114,10 @@ class Config:
     # Enable Performance Counter Report
     OPENVINO_PERFORMANCE_COUNTER = False
 
+    # If Given Object Detection Model is YOLOv3
+    YOLO_MODEL_DEFINED = False
+    IOU_THRESHOLD = 0.4
+
     # Libray Paths
     OPENVINO_CPU_LIBPATH = '/home/intel/inference_engine_samples_build/intel64/Release/lib/libcpu_extension.so'
     OPENVINO_LIBPATH = '/opt/intel/openvino/deployment_tools/inference_engine/lib/intel64'
@@ -134,11 +139,13 @@ class Config:
         print("Model Network Path              :{}".format(Config.MODEL_FILE))
         print("Model Weights Path              :{}".format(Config.MODEL_WEIGHT_FILE))
         print("Model Labels Path               :{}".format(Config.MODEL_LABELS_FILE))
-        print("Detection Confidence            :{}".format(Config.CONFIDENCE))
+        print("Detection Confidence Threshold  :{}".format(Config.CONFIDENCE_THRESHOLD))
         print("Inference Frame Rate            :{}".format(Config.INFERENCE_FRAMERATE))
         print("Inference Async                 :{}".format(Config.ASYNC))
         print("FPS Delay                       :{}".format(Config.FPS_DELAY))
         print("Performance Counter Report      :{}".format(Config.OPENVINO_PERFORMANCE_COUNTER))
+        print("Is It YOLOv3 Model              :{}".format(Config.YOLO_MODEL_DEFINED))
+        print("Intersection Over Union Thres   :{}".format(Config.IOU_THRESHOLD))
         print("Batch Size                      :{}".format(Config.BATCH_SIZE))
         print("Number of Async Requests        :{}".format(Config.OPENVINO_NUM_REQUESTS))
         print("Model Image Width               :{}".format(Config.MODEL_IMAGE_WIDTH))
@@ -154,6 +161,107 @@ class Config:
 
         return None
 
+
+class YoloV3Params:
+    # ------------------------------------------- Extracting layer parameters ------------------------------------------
+    # Magic numbers are copied from yolo samples
+    # Code from: https://docs.openvinotoolkit.org/latest/_inference_engine_ie_bridges_python_sample_object_detection_demo_yolov3_async_README.html
+    def __init__(self, param, side):
+        self.num = 3 if 'num' not in param else len(param['mask'].split(',')) if 'mask' in param else int(param['num'])
+        self.coords = 4 if 'coords' not in param else int(param['coords'])
+        self.classes = 80 if 'classes' not in param else int(param['classes'])
+        self.anchors = [10.0, 13.0, 16.0, 30.0, 33.0, 23.0, 30.0, 61.0, 62.0, 45.0, 59.0, 119.0, 116.0, 90.0, 156.0,
+                        198.0,
+                        373.0, 326.0] if 'anchors' not in param else [float(a) for a in param['anchors'].split(',')]
+        self.side = side
+        if self.side == 13:
+            self.anchor_offset = 2 * 6
+        elif self.side == 26:
+            self.anchor_offset = 2 * 3
+        elif self.side == 52:
+            self.anchor_offset = 2 * 0
+        else:
+            assert False, "Invalid output size. Only 13, 26 and 52 sizes are supported for output spatial dimensions"
+
+    def log_params(self):
+        params_to_print = {'classes': self.classes, 'num': self.num, 'coords': self.coords, 'anchors': self.anchors}
+        [print("         {:8}: {}".format(param_name, param)) for param_name, param in params_to_print.items()]
+
+
+def entry_index(side, coord, classes, location, entry):
+    side_power_2 = side ** 2
+    n = location // side_power_2
+    loc = location % side_power_2
+    return int(side_power_2 * (n * (coord + classes + 1) + entry) + loc)
+
+
+def scale_bbox(x, y, h, w, class_id, confidence, h_scale, w_scale):
+    xmin = int((x - w / 2) * w_scale)
+    ymin = int((y - h / 2) * h_scale)
+    xmax = int(xmin + w * w_scale)
+    ymax = int(ymin + h * h_scale)
+    return dict(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax, class_id=class_id, confidence=confidence)
+
+def intersection_over_union(box_1, box_2):
+    width_of_overlap_area = min(box_1['xmax'], box_2['xmax']) - max(box_1['xmin'], box_2['xmin'])
+    height_of_overlap_area = min(box_1['ymax'], box_2['ymax']) - max(box_1['ymin'], box_2['ymin'])
+    if width_of_overlap_area < 0 or height_of_overlap_area < 0:
+        area_of_overlap = 0
+    else:
+        area_of_overlap = width_of_overlap_area * height_of_overlap_area
+    box_1_area = (box_1['ymax'] - box_1['ymin']) * (box_1['xmax'] - box_1['xmin'])
+    box_2_area = (box_2['ymax'] - box_2['ymin']) * (box_2['xmax'] - box_2['xmin'])
+    area_of_union = box_1_area + box_2_area - area_of_overlap
+    if area_of_union == 0:
+        return 0
+    return area_of_overlap / area_of_union
+
+
+def parse_yolo_region(blob, resized_image_shape, originial_height, original_width, params, threshold):
+    # ------------------------------------------ Validating output parameters ------------------------------------------
+    # _, _, out_blob_h, out_blob_w = blob.shape
+    # assert out_blob_w == out_blob_h, "Invalid size of output blob. It sould be in NCHW layout and height should " \
+    #                                 "be equal to width. Current height = {}, current width = {}" \
+    #                                 "".format(out_blob_h, out_blob_w)
+
+    # ------------------------------------------ Extracting layer parameters -------------------------------------------
+    orig_im_h = originial_height
+    orig_im_w = original_width
+    resized_image_h, resized_image_w = resized_image_shape
+    objects = list()
+    predictions = blob.flatten()
+    side_square = params.side * params.side
+
+    # ------------------------------------------- Parsing YOLO Region output -------------------------------------------
+    for i in range(side_square):
+        row = i // params.side
+        col = i % params.side
+        for n in range(params.num):
+            obj_index = entry_index(params.side, params.coords, params.classes, n * side_square + i, params.coords)
+            scale = predictions[obj_index]
+            if scale < threshold:
+                continue
+            box_index = entry_index(params.side, params.coords, params.classes, n * side_square + i, 0)
+            x = (col + predictions[box_index + 0 * side_square]) / params.side * resized_image_w
+            y = (row + predictions[box_index + 1 * side_square]) / params.side * resized_image_h
+            # Value for exp is very big number in some cases so following construction is using here
+            try:
+                w_exp = exp(predictions[box_index + 2 * side_square])
+                h_exp = exp(predictions[box_index + 3 * side_square])
+            except OverflowError:
+                continue
+            w = w_exp * params.anchors[params.anchor_offset + 2 * n]
+            h = h_exp * params.anchors[params.anchor_offset + 2 * n + 1]
+            for j in range(params.classes):
+                class_index = entry_index(params.side, params.coords, params.classes, n * side_square + i,
+                                          params.coords + 1 + j)
+                confidence = scale * predictions[class_index]
+                if confidence < threshold:
+                    continue
+                objects.append(scale_bbox(x=x, y=y, h=h, w=w, class_id=j, confidence=confidence,
+                                          h_scale=orig_im_h / resized_image_h, w_scale=orig_im_w / resized_image_w))
+
+    return objects
 
 def help_menu():
     """Help Menu for the application
@@ -177,6 +285,8 @@ def help_menu():
     print('-i, --input live|offline : source of video, either webcam or video on disk')
     print('-s, --source <full name to video> : video file full e.g. /home/intel/videos/test.mp4')
     print('-f, --framework openvino|caffe|tensorflow : framework of models being used')
+    print('--yolomodel True|False if object detection model is YOLOv3')
+    print('--iou_threshold True|False if object detection model is YOLOv3')
     print('--mconfig <full name of caffe prototxt, tensoflow pbtxt, openvino xml> file')
     print('--mweight <full name of caffe caffemodel, tensoflow pb, openvino bin> file')
     print('--mlabels <full name of labels file, each line will have one label>')
@@ -184,7 +294,7 @@ def help_menu():
     print('--model_image_width DNN model image width to be used for inferrence')
     print('--model_image_scale DNN model image input scale for inference')
     print('--model_image_mean DNN model image mean substract eg. 127.5,127.5,127.5 ')
-    print('-c, --confidence confidence value, default 0.6')
+    print('-c, --confidence confidence threshold value, default 0.6')
     print('--pc True|False, report performance counters for Deep Learning Layers')
     print('--infer_fc <1, 2 ..> number of frames to infer, by default program tries to infer as much as it can')
     print('--async True|False determine if request is async or not')
@@ -268,7 +378,7 @@ def parse_cli_arguments(argv):
         elif opt in ('-b', '--backend'):
             Config.OPENCV_INFERENCE_BACKEND = arg
         elif opt in ('-c', '--confidence'):
-            Config.CONFIDENCE = float(arg)
+            Config.CONFIDENCE_THRESHOLD = float(arg)
         elif opt == '--mconfig':
             Config.MODEL_FILE = arg
         elif opt == '--mweight':
@@ -298,6 +408,10 @@ def parse_cli_arguments(argv):
             Config.OPENVINO_LIBPATH = arg
         elif opt == '--pc':
             Config.OPENVINO_PERFORMANCE_COUNTER = (arg == 'True')
+        elif opt == '--yolomodel':
+            Config.YOLO_MODEL_DEFINED = (arg == 'True')
+        elif opt == '--iou_threshold':
+            Config.YOLO_MODEL_DEFINED = float(arg)
         else:
             print('Unknown argument {} exiting ...'.format(arg))
             sys.exit(2)
@@ -377,7 +491,7 @@ def post_process(frame, detections):
         score = float(detection[2])
 
         # draw rectangle and write the name of the object if above given confidence
-        if score > Config.CONFIDENCE:
+        if score > Config.CONFIDENCE_THRESHOLD:
             # label index
             # print(score)
 
@@ -418,6 +532,50 @@ def post_process(frame, detections):
                          (int(xmax), int(ymax)),
                          Config.LABEL_COLORS[label_index],
                          thickness=3)
+
+    return frame
+
+
+def post_process_yolo(frame, objects):
+    """Method used to draw rectangels on the detected objects according to defined confidence when Yolo Model Used
+
+        Args:
+            frame: Original frame to be shown
+            objects:
+
+        Returns:
+            Processed frame
+    """
+    # Filtering overlapping boxes with respect to the --iou_threshold CLI parameter
+
+    print(objects)
+
+    for i in range(len(objects)):
+        if objects[i]['confidence'] == 0:
+            continue
+        for j in range(i + 1, len(objects)):
+            if intersection_over_union(objects[i], objects[j]) > Config.IOU_THRESHOLD:
+                objects[j]['confidence'] = 0
+
+    # Drawing objects with respect to the --prob_threshold CLI parameter
+    objects = [obj for obj in objects if obj['confidence'] >= Config.CONFIDENCE_THRESHOLD]
+
+    for obj in objects:
+        # Validation bbox of detected object
+        if obj['xmax'] > frame.shape[1] or obj['ymax'] > frame.shape[0] or obj['xmin'] < 0 or obj['ymin'] < 0:
+            continue
+
+        label_index = obj['class_id']
+
+        label_text = Config.MODEL_LABELS[label_index] if Config.MODEL_LABELS and len(Config.MODEL_LABELS) >= label_index else \
+            str(obj['class_id'])
+
+        label_text += ' ' + str(round(obj['confidence'], 4))
+
+        print(label_text)
+
+        cv.rectangle(frame, (obj['xmin'], obj['ymin']), (obj['xmax'], obj['ymax']), Config.LABEL_COLORS[label_index], 3)
+        cv.putText(frame, label_text,(obj['xmin'], obj['ymin'] - 7), cv.FONT_HERSHEY_COMPLEX, 0.5, Config.LABEL_COLORS[label_index], 2)
 
     return frame
 
@@ -678,6 +836,8 @@ def main(argv):
         if not has_frame:
             break
 
+        yolo_objects = list()
+
         if Config.INFERENCE_FRAMEWORK == 'openvino':
             if Config.ASYNC:
                 # Read and pre-process input images
@@ -705,10 +865,24 @@ def main(argv):
                 openvino_detection_starts[cur_request_id] = infer_start
 
             if openvino_net.requests[cur_request_id].wait(-1) == 0:
-                openvino_detections = openvino_net.requests[cur_request_id].outputs[out_blob]
-                detections = openvino_detections[0][0]
-                detection_ends = time.time()
+                if not Config.YOLO_MODEL_DEFINED:
+                    openvino_detections = openvino_net.requests[cur_request_id].outputs[out_blob]
+                    detections = openvino_detections[0][0]
 
+                else:
+                    output = openvino_net.requests[cur_request_id].outputs
+
+                    for layer_name, out_blob in output.items():
+                        layer_params = YoloV3Params(network.layers[layer_name].params, out_blob.shape[2])
+                        # print("Layer {} parameters: ".format(layer_name))
+                        layer_params.log_params()
+                        yolo_objects += parse_yolo_region(out_blob,
+                                                          resized_frame.shape[2:],
+                                                          Config.IMAGE_HEIGHT,
+                                                          Config.IMAGE_WIDTH,
+                                                          layer_params,
+                                                          Config.CONFIDENCE_THRESHOLD)
+                detection_ends = time.time()
                 inference_time_duration += (detection_ends - openvino_detection_starts[cur_request_id])
                 inferred_frame_count += 1
 
@@ -736,8 +910,11 @@ def main(argv):
 
         # Post Process over Detections
         post_process_start = time.time()
-        if detections is not None:
+        if detections is not None and not Config.YOLO_MODEL_DEFINED:
             post_process(frame, detections)
+
+        if yolo_objects is not None and Config.YOLO_MODEL_DEFINED:
+            post_process_yolo(frame, yolo_objects)
 
         # display text to let user know how to quit
         cv.rectangle(frame, (0, 0), (220, 60), (50, 50, 50, 100), -1)
